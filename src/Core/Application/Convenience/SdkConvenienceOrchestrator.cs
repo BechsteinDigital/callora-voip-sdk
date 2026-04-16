@@ -1,0 +1,345 @@
+using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
+using CalloraVoipSdk.Core.Application.Calls;
+using CalloraVoipSdk.Core.Application.Lines;
+using CalloraVoipSdk.Core.Application.Media;
+using CalloraVoipSdk.Core.Application.Ports.Audio;
+using CalloraVoipSdk.Core.Domain.Calls;
+using CalloraVoipSdk.Core.Domain.Events;
+using CalloraVoipSdk.Core.Domain.Lines;
+
+namespace CalloraVoipSdk.Core.Application.Convenience;
+
+/// <summary>
+/// Application-level orchestration service for additive SDK convenience workflows.
+/// Keeps existing low-level event-driven flows untouched while providing
+/// timeout/cancellation-aware happy-path helpers.
+/// </summary>
+internal sealed class SdkConvenienceOrchestrator : IDisposable
+{
+    private readonly PhoneLineManager _lineManager;
+    private readonly MediaManager _mediaManager;
+    private readonly IAudioDevice _audioDevice;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger<SdkConvenienceOrchestrator> _logger;
+    private readonly ConcurrentDictionary<CallId, DefaultAudioCallAttachment> _defaultAudioAttachments = new();
+    private int _disposed;
+
+    /// <summary>
+    /// Creates one convenience orchestrator bound to the SDK runtime instance.
+    /// </summary>
+    internal SdkConvenienceOrchestrator(
+        PhoneLineManager lineManager,
+        MediaManager mediaManager,
+        IAudioDevice audioDevice,
+        ILoggerFactory loggerFactory)
+    {
+        _lineManager = lineManager ?? throw new ArgumentNullException(nameof(lineManager));
+        _mediaManager = mediaManager ?? throw new ArgumentNullException(nameof(mediaManager));
+        _audioDevice = audioDevice ?? throw new ArgumentNullException(nameof(audioDevice));
+        _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+        _logger = loggerFactory.CreateLogger<SdkConvenienceOrchestrator>();
+    }
+
+    /// <summary>
+    /// Registers a line and waits until registration is complete, canceled, timed out, or failed.
+    /// </summary>
+    internal async Task<LineConnectOutcome> RegisterAndWaitAsync(
+        SipAccount account,
+        TimeSpan timeout,
+        bool failFastOnRegistrationFailed,
+        CancellationToken ct)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(account);
+        ValidatePositiveTimeout(timeout, nameof(timeout));
+
+        IPhoneLine line;
+        try
+        {
+            line = _lineManager.Register(account);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Convenience connect failed while registering line for user [{User}] at {Server}.",
+                account.Username,
+                account.SipServer);
+            return new LineConnectOutcome(LineConnectStatus.Failed, null, null, ex);
+        }
+
+        var waiter = new TaskCompletionSource<LineState>(TaskCreationOptions.RunContinuationsAsynchronously);
+        EventHandler<LineStateChangedEventArgs> onStateChanged = (_, args) =>
+        {
+            if (ShouldCompleteConnectWait(args.NewState, failFastOnRegistrationFailed))
+                waiter.TrySetResult(args.NewState);
+        };
+
+        line.StateChanged += onStateChanged;
+        try
+        {
+            if (ShouldCompleteConnectWait(line.State, failFastOnRegistrationFailed))
+                waiter.TrySetResult(line.State);
+
+            using var timeoutCts = new CancellationTokenSource(timeout);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+            var finalState = await waiter.Task.WaitAsync(linkedCts.Token).ConfigureAwait(false);
+            return finalState switch
+            {
+                LineState.Registered => new LineConnectOutcome(LineConnectStatus.Registered, line, finalState, null),
+                _ => new LineConnectOutcome(LineConnectStatus.Failed, line, finalState, null),
+            };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return new LineConnectOutcome(LineConnectStatus.Canceled, line, line.State, null);
+        }
+        catch (OperationCanceledException)
+        {
+            return new LineConnectOutcome(LineConnectStatus.Timeout, line, line.State, null);
+        }
+        finally
+        {
+            line.StateChanged -= onStateChanged;
+        }
+    }
+
+    /// <summary>
+    /// Starts an outbound call and waits until it becomes connected, canceled, timed out, or failed.
+    /// </summary>
+    internal async Task<CallConnectOutcome> DialAndWaitUntilConnectedAsync(
+        IPhoneLine line,
+        string targetUri,
+        DialOptions? dialOptions,
+        TimeSpan connectTimeout,
+        bool hangupOnTimeout,
+        bool hangupOnCancellation,
+        CancellationToken ct)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(line);
+        if (string.IsNullOrWhiteSpace(targetUri))
+            throw new ArgumentException("Target URI is required.", nameof(targetUri));
+        ValidatePositiveTimeout(connectTimeout, nameof(connectTimeout));
+
+        ICall call;
+        try
+        {
+            call = await line.DialAsync(targetUri, dialOptions, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return new CallConnectOutcome(CallConnectStatus.Canceled, null, null, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Convenience dial failed before wait phase. target={TargetUri} line={LineId}",
+                targetUri,
+                line.LineId);
+            return new CallConnectOutcome(CallConnectStatus.Failed, null, null, ex);
+        }
+
+        var waiter = new TaskCompletionSource<CallState>(TaskCreationOptions.RunContinuationsAsynchronously);
+        EventHandler<CallStateChangedEventArgs> onStateChanged = (_, args) =>
+        {
+            if (ShouldCompleteDialWait(args.NewState))
+                waiter.TrySetResult(args.NewState);
+        };
+
+        call.StateChanged += onStateChanged;
+        try
+        {
+            if (ShouldCompleteDialWait(call.State))
+                waiter.TrySetResult(call.State);
+
+            using var timeoutCts = new CancellationTokenSource(connectTimeout);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+            var finalState = await waiter.Task.WaitAsync(linkedCts.Token).ConfigureAwait(false);
+            return finalState switch
+            {
+                CallState.Connected or CallState.OnHold =>
+                    new CallConnectOutcome(CallConnectStatus.Connected, call, finalState, null),
+                _ => new CallConnectOutcome(CallConnectStatus.Failed, call, finalState, null),
+            };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            if (hangupOnCancellation)
+                await TryHangupAsync(call).ConfigureAwait(false);
+
+            return new CallConnectOutcome(CallConnectStatus.Canceled, call, call.State, null);
+        }
+        catch (OperationCanceledException)
+        {
+            if (hangupOnTimeout)
+                await TryHangupAsync(call).ConfigureAwait(false);
+
+            return new CallConnectOutcome(CallConnectStatus.Timeout, call, call.State, null);
+        }
+        finally
+        {
+            call.StateChanged -= onStateChanged;
+        }
+    }
+
+    /// <summary>
+    /// Attaches SDK default audio (receiver, sender, and configured audio device) to the call.
+    /// Existing convenience default-audio attachments on other calls are replaced.
+    /// </summary>
+    internal Task AttachDefaultAudioAsync(ICall call, CancellationToken ct)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(call);
+        ct.ThrowIfCancellationRequested();
+
+        // Convenience flow is optimized for one active default audio route.
+        ReplaceOtherDefaultAudioAttachments(call.CallId);
+
+        var attachment = _defaultAudioAttachments.GetOrAdd(
+            call.CallId,
+            _ => new DefaultAudioCallAttachment(
+                call,
+                _mediaManager,
+                _audioDevice,
+                _loggerFactory,
+                (_, disposedAttachment) => RemoveDefaultAudioAttachment(call.CallId, disposedAttachment)));
+
+        attachment.EnsureStarted();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Detaches convenience default audio from a call if present.
+    /// </summary>
+    internal Task DetachDefaultAudioAsync(ICall call, CancellationToken ct)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(call);
+        ct.ThrowIfCancellationRequested();
+
+        if (_defaultAudioAttachments.TryRemove(call.CallId, out var attachment))
+            attachment.Dispose();
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
+        foreach (var entry in _defaultAudioAttachments.Values)
+        {
+            try
+            {
+                entry.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed disposing default audio attachment during SDK shutdown.");
+            }
+        }
+
+        _defaultAudioAttachments.Clear();
+    }
+
+    private void ReplaceOtherDefaultAudioAttachments(CallId currentCallId)
+    {
+        foreach (var pair in _defaultAudioAttachments)
+        {
+            if (pair.Key == currentCallId)
+                continue;
+
+            if (_defaultAudioAttachments.TryRemove(pair.Key, out var previous))
+                previous.Dispose();
+        }
+    }
+
+    private void RemoveDefaultAudioAttachment(CallId callId, DefaultAudioCallAttachment attachment)
+    {
+        if (_defaultAudioAttachments.TryGetValue(callId, out var existing)
+            && ReferenceEquals(existing, attachment))
+        {
+            _defaultAudioAttachments.TryRemove(callId, out _);
+        }
+    }
+
+    private static bool ShouldCompleteConnectWait(LineState state, bool failFastOnRegistrationFailed) =>
+        state == LineState.Registered
+        || state == LineState.Unregistered
+        || (failFastOnRegistrationFailed && state == LineState.RegistrationFailed);
+
+    private static bool ShouldCompleteDialWait(CallState state) =>
+        state is CallState.Connected or CallState.OnHold or CallState.Terminated;
+
+    private async Task TryHangupAsync(ICall call)
+    {
+        try
+        {
+            await call.HangupAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Best-effort hangup failed for call {CallId}.", call.CallId);
+        }
+    }
+
+    private void ThrowIfDisposed()
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+            throw new ObjectDisposedException(nameof(SdkConvenienceOrchestrator));
+    }
+
+    private static void ValidatePositiveTimeout(TimeSpan timeout, string paramName)
+    {
+        if (timeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(paramName, "Timeout must be greater than zero.");
+    }
+
+}
+
+/// <summary>
+/// Internal result for line convenience connect flow.
+/// </summary>
+internal readonly record struct LineConnectOutcome(
+    LineConnectStatus Status,
+    IPhoneLine? Line,
+    LineState? FinalState,
+    Exception? Error);
+
+/// <summary>
+/// Internal status for line convenience connect flow.
+/// </summary>
+internal enum LineConnectStatus
+{
+    Registered,
+    Timeout,
+    Canceled,
+    Failed
+}
+
+/// <summary>
+/// Internal result for call convenience dial-and-wait flow.
+/// </summary>
+internal readonly record struct CallConnectOutcome(
+    CallConnectStatus Status,
+    ICall? Call,
+    CallState? FinalState,
+    Exception? Error);
+
+/// <summary>
+/// Internal status for call convenience dial-and-wait flow.
+/// </summary>
+internal enum CallConnectStatus
+{
+    Connected,
+    Timeout,
+    Canceled,
+    Failed
+}

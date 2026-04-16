@@ -1,0 +1,16 @@
+apiRules:
+- exclude:
+    hasAttribute:
+      uid: System.ObsoleteAttribute
+- exclude:
+    uidRegex: ^CalloraVoipSdk\.Core\.Infrastructure
+    type: Namespace
+- exclude:
+    uidRegex: ^CalloraVoipSdk\.Core\.Infrastructure
+    type: Type
+- exclude:
+    uidRegex: ^CalloraVoipSdk\.Core\.Application\.Ports
+    type: Namespace
+- exclude:
+    uidRegex: ^CalloraVoipSdk\.Core\.Application\.Ports
+    type: Type

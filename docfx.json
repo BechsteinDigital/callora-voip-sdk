@@ -1,0 +1,44 @@
+{
+  "metadata": [
+    {
+      "src": [
+        {
+          "files": ["src/Core/CalloraVoipSdk.Core.csproj", "src/Client/CalloraVoipSdk.Client.csproj"],
+          "src": "."
+        }
+      ],
+      "dest": "docs/portal/_api",
+      "filter": "filterConfig.yml",
+      "properties": {
+        "TargetFramework": "net8.0",
+        "Configuration": "Release"
+      }
+    }
+  ],
+  "build": {
+    "content": [
+      {
+        "files": ["**.yml", "**.md"],
+        "src": "docs/portal",
+        "dest": "."
+      },
+      {
+        "files": ["_api/**.yml", "_api/index.md"],
+        "src": "docs/portal"
+      }
+    ],
+    "resource": [
+      {
+        "files": ["public/**"],
+        "src": "docs/portal"
+      }
+    ],
+    "output": "_site",
+    "globalMetadata": {
+      "_appTitle": "CalloraVoipSdk",
+      "_appFooter": "CalloraVoipSdk — Commercial .NET VoIP SDK",
+      "_enableSearch": true
+    },
+    "template": ["default", "modern"]
+  }
+}

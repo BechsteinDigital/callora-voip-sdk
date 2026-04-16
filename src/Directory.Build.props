@@ -1,0 +1,40 @@
+<Project>
+  <PropertyGroup>
+    <VersionPrefix>0.9.0</VersionPrefix>
+    <Version Condition="'$(Version)' == ''">$(VersionPrefix)</Version>
+    <Authors>Bechstein Digital</Authors>
+    <Company>Bechstein Digital</Company>
+    <Product>CalloraVoipSdk</Product>
+    <RepositoryUrl>https://github.com/BechsteinDigital/CalloraVoipSdk</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/BechsteinDigital/CalloraVoipSdk</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageTags>voip;sip;rtp;turn;telephony</PackageTags>
+    <Description>CalloraVoipSdk module package.</Description>
+    <PackageId>$(MSBuildProjectName)</PackageId>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>8.0-recommended</AnalysisLevel>
+    <NoWarn>$(NoWarn);CS1573;CS1574;CS1734;CA1001;CA1068;CA1305;CA1510;CA1513;CA1716;CA1805;CA1806;CA1822;CA1832;CA1848;CA1859;CA1861;CA1865;CA2012;CA2016;CA2208;CA2249;CA5350;CA5351</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\README.md" Pack="true" PackagePath="\" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\LICENSE" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'CalloraVoipSdk.Core'">
+    <Description>Core SIP/RTP/STUN/TURN runtime for CalloraVoipSdk.</Description>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'CalloraVoipSdk.Audio.Windows'">
+    <Description>Windows audio integration for CalloraVoipSdk.</Description>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'CalloraVoipSdk.Audio.Linux'">
+    <Description>Linux audio integration for CalloraVoipSdk.</Description>
+  </PropertyGroup>
+</Project>

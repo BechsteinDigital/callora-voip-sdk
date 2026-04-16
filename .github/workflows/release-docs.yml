@@ -1,0 +1,67 @@
+# .github/workflows/release-docs.yml
+# NOTE: This workflow deploys to GitHub Pages.
+# Enable only after the repository is made public.
+name: Release Documentation
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  release-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore tools
+        run: dotnet tool restore
+
+      - name: Restore packages
+        run: dotnet restore CalloraVoipSdk.sln
+
+      - name: Build API projects
+        run: |
+          dotnet build src/Core/CalloraVoipSdk.Core.csproj --no-restore -c Release
+          dotnet build src/Client/CalloraVoipSdk.Client.csproj --no-restore -c Release
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Inject version into DocFX globalMetadata
+        run: |
+          jq --arg v "${{ steps.version.outputs.VERSION }}" \
+            '.build.globalMetadata._appVersion = $v' \
+            docfx.json > docfx.tmp.json && mv docfx.tmp.json docfx.json
+
+      - name: Build DocFX site
+        run: dotnet tool run docfx docfx.json
+
+      - name: Deploy versioned docs to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./_site
+          publish_branch: gh-pages
+          destination_dir: ${{ steps.version.outputs.VERSION }}
+
+      - name: Update root (latest) docs
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./_site
+          publish_branch: gh-pages

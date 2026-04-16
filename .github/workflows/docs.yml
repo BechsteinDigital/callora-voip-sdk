@@ -1,0 +1,43 @@
+name: Documentation Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore tools
+        run: dotnet tool restore
+
+      - name: Restore packages
+        run: dotnet restore CalloraVoipSdk.sln
+
+      - name: Build API projects (generate XML docs)
+        run: |
+          dotnet build src/Core/CalloraVoipSdk.Core.csproj --no-restore -c Release
+          dotnet build src/Client/CalloraVoipSdk.Client.csproj --no-restore -c Release
+
+      - name: Build DocFX site
+        run: dotnet tool run docfx docfx.json
+
+      - name: Upload site artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docfx-site
+          path: _site/
+          retention-days: 7

@@ -1,0 +1,28 @@
+{
+  "capturedAtUtc": "2026-04-14T21:22:05.1162100+00:00",
+  "runtimeVersion": "8.0.26",
+  "frameworkDescription": ".NET 8.0.26",
+  "cases": [
+    {
+      "name": "srtp.protect_unprotect.roundtrip",
+      "meanNanosecondsPerOp": 52000.0,
+      "meanAllocatedBytesPerOp": 1904.082666666667,
+      "operationsPerIteration": 3000,
+      "iterations": 6
+    },
+    {
+      "name": "sip.stream_framer.frame_parse",
+      "meanNanosecondsPerOp": 12000.0,
+      "meanAllocatedBytesPerOp": 3008.0050000000006,
+      "operationsPerIteration": 8000,
+      "iterations": 6
+    },
+    {
+      "name": "rtp.packet_codec.decode",
+      "meanNanosecondsPerOp": 340.0,
+      "meanAllocatedBytesPerOp": 1312.0004,
+      "operationsPerIteration": 100000,
+      "iterations": 6
+    }
+  ]
+}

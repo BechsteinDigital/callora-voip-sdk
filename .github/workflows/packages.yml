@@ -1,0 +1,59 @@
+name: packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version (e.g. 0.9.1 or 0.9.1-preview.1)
+        required: true
+        type: string
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    env:
+      NUGET_API_KEY: "oy2dncpfcrhoxqwa4claqcu6mdi4ctuufkok7cftz563yi"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Resolve package version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Restore
+        run: dotnet restore CalloraVoipSdk.sln
+
+      - name: Pack CalloraVoipSdk.Core
+        run: dotnet pack src/Core/CalloraVoipSdk.Core.csproj -c Release --no-restore -o artifacts/nuget /p:PackageVersion=${{ steps.version.outputs.version }}
+
+      - name: Pack CalloraVoipSdk.Audio.Windows
+        run: dotnet pack src/Audio/Windows/CalloraVoipSdk.Audio.Windows.csproj -c Release --no-restore -o artifacts/nuget /p:PackageVersion=${{ steps.version.outputs.version }}
+
+      - name: Pack CalloraVoipSdk.Audio.Linux
+        run: dotnet pack src/Audio/Linux/CalloraVoipSdk.Audio.Linux.csproj -c Release --no-restore -o artifacts/nuget /p:PackageVersion=${{ steps.version.outputs.version }}
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-${{ steps.version.outputs.version }}
+          path: artifacts/nuget/*
+
+      - name: Publish to NuGet.org
+        if: ${{ env.NUGET_API_KEY != '' }}
+        run: dotnet nuget push "artifacts/nuget/*.nupkg" --api-key "${{ env.NUGET_API_KEY }}" --source "https://api.nuget.org/v3/index.json" --skip-duplicate
